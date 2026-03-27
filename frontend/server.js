@@ -16,10 +16,49 @@ const options = {
   cert: fs.readFileSync('cert.pem')
 };
 
-// Shared in-memory world state (resets on server restart)
+// Shared world state persisted to disk
+const WORLD_STATE_PATH = path.join(__dirname, 'world-state.json');
 const worldState = new Map();
 let sharedXrMode = 'VR';
 const socketToClientId = new Map();
+
+let saveTimer = null;
+
+function loadWorldState() {
+  if (!fs.existsSync(WORLD_STATE_PATH)) return;
+  try {
+    const raw = fs.readFileSync(WORLD_STATE_PATH, 'utf8');
+    if (!raw.trim()) return;
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.objects)) {
+      data.objects.forEach(obj => {
+        if (obj && obj.id && obj.source) {
+          worldState.set(obj.id, obj);
+        }
+      });
+    }
+    if (data.xrMode === 'VR' || data.xrMode === 'AR') {
+      sharedXrMode = data.xrMode;
+    }
+  } catch (err) {
+    console.error('Failed to load world state:', err);
+  }
+}
+
+function scheduleSaveWorldState() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const payload = {
+      xrMode: sharedXrMode,
+      objects: Array.from(worldState.values())
+    };
+    try {
+      fs.writeFileSync(WORLD_STATE_PATH, JSON.stringify(payload, null, 2));
+    } catch (err) {
+      console.error('Failed to save world state:', err);
+    }
+  }, 150);
+}
 
 function broadcast(message, excludeSocket) {
   const payload = JSON.stringify(message);
@@ -29,6 +68,9 @@ function broadcast(message, excludeSocket) {
     }
   });
 }
+
+// Load persisted world state before accepting connections
+loadWorldState();
 
 // Start HTTPS + WebSocket server
 const server = https.createServer(options, app);
@@ -63,6 +105,7 @@ wss.on('connection', socket => {
       if (!msg.object.source) return;
 
       worldState.set(msg.object.id, msg.object);
+      scheduleSaveWorldState();
       broadcast({
         type: 'create',
         object: msg.object,
@@ -73,6 +116,7 @@ wss.on('connection', socket => {
 
     if (msg.type === 'xr-mode' && (msg.mode === 'VR' || msg.mode === 'AR')) {
       sharedXrMode = msg.mode;
+      scheduleSaveWorldState();
       broadcast({
         type: 'xr-mode',
         mode: sharedXrMode,
@@ -88,6 +132,7 @@ wss.on('connection', socket => {
         if (typeof msg.isLoading === 'boolean') {
           existing.isLoading = msg.isLoading;
         }
+        scheduleSaveWorldState();
         broadcast({
           type: 'replace',
           id: msg.id,
@@ -103,6 +148,7 @@ wss.on('connection', socket => {
       const existing = worldState.get(msg.id);
       if (existing) {
         existing.transform = msg.transform;
+        scheduleSaveWorldState();
         broadcast({
           type: 'update',
           id: msg.id,
@@ -141,6 +187,7 @@ wss.on('connection', socket => {
   });
     if (msg.type === 'delete' && msg.id) {
       if (worldState.delete(msg.id)) {
+        scheduleSaveWorldState();
         broadcast({
           type: 'delete',
           id: msg.id,

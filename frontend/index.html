@@ -951,7 +951,24 @@ function loadSourceIntoWrapper(wrapper, source) {
 
 async function sendPrompt() {
   const input = document.getElementById("promptInput");
+  const sendButton = document.getElementById('sendPrompt');
   if (!input.value.trim()) return;
+
+  if (sendButton.disabled) return;
+  sendButton.disabled = true;
+  const originalLabel = sendButton.textContent;
+  let cooldown = 10;
+  sendButton.textContent = `Wait ${cooldown}s`;
+  const cooldownTimer = setInterval(() => {
+    cooldown -= 1;
+    if (cooldown <= 0) {
+      clearInterval(cooldownTimer);
+      sendButton.disabled = false;
+      sendButton.textContent = originalLabel;
+    } else {
+      sendButton.textContent = `Wait ${cooldown}s`;
+    }
+  }, 1000);
 
   // 1. Spawn loading placeholder
   let wrapper;
